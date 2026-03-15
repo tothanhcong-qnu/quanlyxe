@@ -1,0 +1,16 @@
+{
+  "name": "quan-ly-xe-tap-lai-web",
+  "version": "1.0.0",
+  "description": "Ung dung quan ly xe tap lai Web",
+  "scripts": {
+    "dev": "vite src",
+    "build": "vite build src",
+    "preview": "vite preview src"
+  },
+  "dependencies": {
+    "xlsx": "^0.18.5"
+  },
+  "devDependencies": {
+    "vite": "^5.0.0"
+  }
+}

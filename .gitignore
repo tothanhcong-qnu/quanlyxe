@@ -1,0 +1,15 @@
+node_modules/
+dist/
+dist-electron/
+.vscode/
+.idea/
+*.log
+.env
+.npm
+mingit/
+mingit.zip
+.system_generated/
+*.webp
+*.png
+!public/logo.png
+!src/logo.png
