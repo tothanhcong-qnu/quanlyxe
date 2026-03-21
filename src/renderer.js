@@ -557,11 +557,15 @@ document.getElementById("fileInput").addEventListener("change", (e) => {
           state.vehicles = [...newVehicles, ...state.vehicles];
           rerender();
           try {
-            const batch = writeBatch(db);
-            newVehicles.forEach(v => {
-               batch.set(doc(db, "vehicles", v.id), v);
-            });
-            await batch.commit();
+            // Push chunks of max 400 docs
+            for (let i = 0; i < newVehicles.length; i += 400) {
+              const chunk = newVehicles.slice(i, i + 400);
+              const batch = writeBatch(db);
+              chunk.forEach(v => {
+                 batch.set(doc(db, "vehicles", v.id), v);
+              });
+              await batch.commit();
+            }
             persist();
             alert(`Nạp file thành công!\n- Thêm mới: ${addedCount} xe\n- Bỏ qua do trùng biển số: ${skippedCount} xe`);
           } catch(err) {
@@ -601,11 +605,17 @@ async function syncLocalToFirebase() {
   
   try {
     el.vehicleList.innerHTML = '<div class="card empty">Đang đẩy dữ liệu lên máy chủ, vui lòng đợi...</div>';
-    const batch = writeBatch(db);
-    localData.forEach(v => {
-      batch.set(doc(db, "vehicles", v.id), v);
-    });
-    await batch.commit();
+    
+    // Push chunks of max 400 docs
+    for (let i = 0; i < localData.length; i += 400) {
+      const chunk = localData.slice(i, i + 400);
+      const batch = writeBatch(db);
+      chunk.forEach(v => {
+        batch.set(doc(db, "vehicles", v.id), v);
+      });
+      await batch.commit();
+    }
+    
     persist();
     alert(`Đã đồng bộ thành công ${localData.length} xe lên máy chủ Cloud!`);
     await loadVehicles();
