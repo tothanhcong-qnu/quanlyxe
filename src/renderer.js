@@ -1,3 +1,6 @@
+import { db } from "./firebase.js";
+import { collection, getDocs, setDoc, deleteDoc, doc, writeBatch } from "firebase/firestore";
+
 const STORAGE_KEY = "xe-tap-lai-desktop-v1";
 const ALERT_DAYS = 30;
 const seededVehicles = [
@@ -77,12 +80,13 @@ const fields = [
   ["hanHopDong", "Hạn hợp đồng", "date"],
 ];
 const state = {
-  vehicles: loadVehicles(),
+  vehicles: [],
   search: "",
   hangFilter: "tat-ca",
   alertFilter: "tat-ca",
   currentTab: "list",
   editingId: null,
+  loading: true,
 };
 const el = {
   statTotal: document.getElementById("statTotal"),
@@ -102,17 +106,50 @@ const el = {
   modalTitle: document.getElementById("modalTitle"),
   btnSaveModal: document.getElementById("btnSaveModal"),
 };
-function loadVehicles() {
+async function loadVehicles() {
   try {
+    const querySnapshot = await getDocs(collection(db, "vehicles"));
+    const vehiclesData = [];
+    querySnapshot.forEach((document) => {
+      vehiclesData.push(document.data());
+    });
+    if (vehiclesData.length > 0) {
+      state.vehicles = vehiclesData;
+    } else {
+      const raw = localStorage.getItem(STORAGE_KEY);
+      const parsed = raw ? JSON.parse(raw) : null;
+      state.vehicles = Array.isArray(parsed) && parsed.length ? parsed : seededVehicles;
+    }
+  } catch (err) {
+    console.error("Lỗi tải từ Firebase:", err);
+    alert("Không thể kết nối máy chủ. Đang tải dữ liệu lưu tạm.");
     const raw = localStorage.getItem(STORAGE_KEY);
-    const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) && parsed.length ? parsed : seededVehicles;
-  } catch {
-    return seededVehicles;
+    const parsed = raw ? JSON.parse(raw) : null;
+    state.vehicles = Array.isArray(parsed) && parsed.length ? parsed : seededVehicles;
   }
+  state.loading = false;
+  rerender();
 }
 function persist() {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(state.vehicles));
+}
+async function saveVehicleToFirebase(vehicle) {
+  try {
+    await setDoc(doc(db, "vehicles", vehicle.id), vehicle);
+    persist();
+  } catch (err) {
+    console.error("Lỗi lưu xe:", err);
+    alert("Lỗi lưu lên Firebase!");
+  }
+}
+async function deleteVehicleFromFirebase(id) {
+  try {
+    await deleteDoc(doc(db, "vehicles", id));
+    persist();
+  } catch (err) {
+    console.error("Lỗi xóa xe:", err);
+    alert("Lỗi xóa trên Firebase!");
+  }
 }
 function normalizeDate(value) {
   if (!value) return "";
@@ -246,6 +283,11 @@ function renderStats() {
     : "Hiện chưa có xe nào sắp hết hạn hoặc quá hạn trong vòng 30 ngày.";
 }
 function renderVehicles() {
+  if (state.loading) {
+    el.vehicleList.innerHTML =
+      '<div class="card empty">Đang đồng bộ dữ liệu đám mây...</div>';
+    return;
+  }
   const vehicles = getFilteredVehicles();
   if (!vehicles.length) {
     el.vehicleList.innerHTML =
@@ -337,7 +379,6 @@ function rerender() {
   renderVehicles();
   renderAlerts();
   renderReport();
-  persist();
 }
 async function handleImport() {
   const fileInput = document.getElementById("fileInput");
@@ -395,12 +436,13 @@ window.openEdit = function (id) {
   const vehicle = state.vehicles.find((v) => v.id === id);
   if (vehicle) openModal(vehicle);
 };
-window.removeVehicle = function (id) {
+window.removeVehicle = async function (id) {
   const vehicle = state.vehicles.find((v) => v.id === id);
   if (!vehicle) return;
   if (confirm("Xóa xe " + (vehicle.bienSo || "") + "?")) {
     state.vehicles = state.vehicles.filter((v) => v.id !== id);
     rerender();
+    await deleteVehicleFromFirebase(id);
   }
 };
 document
@@ -415,21 +457,25 @@ document.getElementById("btnCancelModal").addEventListener("click", closeModal);
 el.modal.addEventListener("click", (e) => {
   if (e.target === el.modal) closeModal();
 });
-el.btnSaveModal.addEventListener("click", () => {
+el.btnSaveModal.addEventListener("click", async () => {
   const data = readForm();
   if (!data.bienSo || !data.hieu) {
     alert("Cần nhập ít nhất Biển số và Hiệu xe.");
     return;
   }
+  let savedVehicle;
   if (state.editingId) {
+    savedVehicle = { ...state.vehicles.find((v) => v.id === state.editingId), ...data };
     state.vehicles = state.vehicles.map((v) =>
-      v.id === state.editingId ? { ...v, ...data } : v,
+      v.id === state.editingId ? savedVehicle : v,
     );
   } else {
-    state.vehicles.unshift({ id: crypto.randomUUID(), ...data });
+    savedVehicle = { id: crypto.randomUUID(), ...data };
+    state.vehicles.unshift(savedVehicle);
   }
   closeModal();
   rerender();
+  await saveVehicleToFirebase(savedVehicle);
 });
 el.searchInput.addEventListener("input", (e) => {
   state.search = e.target.value;
@@ -449,7 +495,7 @@ document.getElementById("fileInput").addEventListener("change", (e) => {
   const file = e.target.files[0];
   if (!file) return;
   const reader = new FileReader();
-  reader.onload = (evt) => {
+  reader.onload = async (evt) => {
     try {
       const data = evt.target.result;
       const wb = XLSX.read(data, { type: "array" });
@@ -510,7 +556,17 @@ document.getElementById("fileInput").addEventListener("change", (e) => {
         if (newVehicles.length > 0) {
           state.vehicles = [...newVehicles, ...state.vehicles];
           rerender();
-          alert(`Nạp file thành công!\n- Thêm mới: ${addedCount} xe\n- Bỏ qua do trùng biển số: ${skippedCount} xe`);
+          try {
+            const batch = writeBatch(db);
+            newVehicles.forEach(v => {
+               batch.set(doc(db, "vehicles", v.id), v);
+            });
+            await batch.commit();
+            persist();
+            alert(`Nạp file thành công!\n- Thêm mới: ${addedCount} xe\n- Bỏ qua do trùng biển số: ${skippedCount} xe`);
+          } catch(err) {
+            alert("Lỗi khi đồng bộ lên Firebase: " + err.message);
+          }
         } else {
           alert(`Không có xe nào được thêm mới.\n- Bỏ qua do trùng biển số: ${skippedCount} xe`);
         }
@@ -531,7 +587,38 @@ document.getElementById("btnPrintTop").addEventListener("click", printReport);
 document
   .getElementById("btnPrintReport")
   .addEventListener("click", printReport);
+async function syncLocalToFirebase() {
+  if (!confirm("Bạn có chắc chắn muốn lấy dữ liệu ở máy này đẩy lên máy chủ Cloud?\nĐiều này giúp các máy khác có thể thấy được dữ liệu mới nhất nếu dữ liệu trước đó chưa đồng bộ.")) return;
+  
+  const raw = localStorage.getItem(STORAGE_KEY);
+  const parsed = raw ? JSON.parse(raw) : null;
+  const localData = Array.isArray(parsed) && parsed.length ? parsed : state.vehicles;
+  
+  if (!localData || localData.length === 0) {
+    alert("Không có liệu cục bộ để đồng bộ.");
+    return;
+  }
+  
+  try {
+    el.vehicleList.innerHTML = '<div class="card empty">Đang đẩy dữ liệu lên máy chủ, vui lòng đợi...</div>';
+    const batch = writeBatch(db);
+    localData.forEach(v => {
+      batch.set(doc(db, "vehicles", v.id), v);
+    });
+    await batch.commit();
+    persist();
+    alert(`Đã đồng bộ thành công ${localData.length} xe lên máy chủ Cloud!`);
+    await loadVehicles();
+  } catch(err) {
+    alert("Lỗi khi đồng bộ lên Cloud: " + err.message);
+    rerender();
+  }
+}
+
+document.getElementById("btnSyncLocal")?.addEventListener("click", syncLocalToFirebase);
+
 renderForm();
 rerender();
+loadVehicles();
 // Thiết lập title
 document.title = "Quản lý xe tập lái Web";
