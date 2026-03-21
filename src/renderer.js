@@ -432,6 +432,40 @@ function setActiveTab(name) {
     .forEach((panel) => panel.classList.remove("active"));
   document.getElementById("panel-" + name).classList.add("active");
 }
+
+document.getElementById("btnDeleteAll")?.addEventListener("click", async () => {
+  if (!state.vehicles || state.vehicles.length === 0) {
+    alert("Hệ thống đang trống, không có dữ liệu để xóa.");
+    return;
+  }
+  const code = Math.floor(1000 + Math.random() * 9000);
+  const input = prompt(`CẢNH BÁO NGUY HIỂM!\nHành động này sẽ XÓA SẠCH toàn bộ ${state.vehicles.length} xe trên hệ thống máy chủ và máy tính này.\n\nĐể xác nhận xóa, hãy nhập chính xác 4 số sau: ${code}`);
+  if (input !== String(code)) {
+    if (input !== null) alert("Mã xác nhận không đúng. Đã hủy thao tác xóa.");
+    return;
+  }
+  try {
+    el.vehicleList.innerHTML = '<div class="card empty">Đang tiến hành dọn dẹp máy chủ, vui lòng không tắt trang...</div>';
+    
+    // Chunking to delete 400 docs at a time
+    for (let i = 0; i < state.vehicles.length; i += 400) {
+      const chunk = state.vehicles.slice(i, i + 400);
+      const batch = writeBatch(db);
+      chunk.forEach(v => {
+        batch.delete(doc(db, "vehicles", v.id));
+      });
+      await batch.commit();
+    }
+    
+    state.vehicles = [];
+    persist(); // Clear local storage state
+    rerender();
+    alert("Đã xóa sạch toàn bộ dữ liệu trên hệ thống!");
+  } catch(err) {
+    alert("Lỗi khi xóa trên hệ thống Cloud: " + err.message);
+    loadVehicles(); // Reload to recover safely
+  }
+});
 window.openEdit = function (id) {
   const vehicle = state.vehicles.find((v) => v.id === id);
   if (vehicle) openModal(vehicle);
